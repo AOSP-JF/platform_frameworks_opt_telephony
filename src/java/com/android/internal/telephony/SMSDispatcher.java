@@ -1123,15 +1123,6 @@ public abstract class SMSDispatcher extends Handler {
      * @return true if the destination is approved; false if user confirmation event was sent
      */
     boolean checkDestination(SmsTracker tracker) {
-        List<String> ignorePackages = Arrays.asList(
-                mContext.getResources().getStringArray(R.array.config_ignored_sms_packages));
-
-        String packageName = resolvePackageName(tracker);
-
-        if (ignorePackages.contains(packageName)) {
-            return true;
-        }
-
         if (mContext.checkCallingOrSelfPermission(SEND_SMS_NO_CONFIRMATION_PERMISSION)
                 == PackageManager.PERMISSION_GRANTED) {
             return true;            // app is pre-approved to send to short codes

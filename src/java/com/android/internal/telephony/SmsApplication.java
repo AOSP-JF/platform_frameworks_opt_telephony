@@ -749,13 +749,6 @@ public final class SmsApplication {
             defaultSmsPackage = component.getPackageName();
         }
 
-        List<String> ignorePackages = Arrays.asList(
-                context.getResources().getStringArray(R.array.config_ignored_sms_packages));
-
-        if (ignorePackages.contains(packageName)) {
-            return false;
-        }
-
         if ((defaultSmsPackage == null || !defaultSmsPackage.equals(packageName)) &&
                 !packageName.equals(BLUETOOTH_PACKAGE_NAME)) {
             // To write the message for someone other than the default SMS and BT app

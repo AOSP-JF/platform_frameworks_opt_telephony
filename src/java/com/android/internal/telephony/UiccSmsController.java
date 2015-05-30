@@ -198,9 +198,6 @@ public class UiccSmsController extends ISms.Stub {
                     "\n isExpectMore= " + isExpectMore +
                     "\n validityPeriod= " + validityPeriod);
         }
-        mContext.sendOrderedBroadcastAsUser(broadcast, UserHandle.OWNER,
-                android.Manifest.permission.INTERCEPT_SMS,
-                mReceiver, null, Activity.RESULT_OK, destAddr, null);
     }
 
     public boolean
