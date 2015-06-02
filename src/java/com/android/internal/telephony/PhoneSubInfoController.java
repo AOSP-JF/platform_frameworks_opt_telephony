@@ -80,7 +80,7 @@ public class PhoneSubInfoController extends IPhoneSubInfo.Stub {
     }
 
     public String getDeviceSvn() {
-        return getDeviceSvnUsingSubId(getFirstPhoneSubId());
+        return getDeviceSvnUsingSubId(getDefaultSubscription());
     }
 
     public String getDeviceSvnUsingSubId(int subId) {
@@ -172,7 +172,7 @@ public class PhoneSubInfoController extends IPhoneSubInfo.Stub {
     }
 
     public String getVoiceMailNumber() {
-        return getVoiceMailNumberForSubscriber(getDefaultVoiceSubId());
+        return getVoiceMailNumberForSubscriber(getDefaultSubscription());
     }
 
     public String getVoiceMailNumberForSubscriber(int subId) {
@@ -187,7 +187,7 @@ public class PhoneSubInfoController extends IPhoneSubInfo.Stub {
     }
 
     public String getCompleteVoiceMailNumber() {
-        return getCompleteVoiceMailNumberForSubscriber(getDefaultVoiceSubId());
+        return getCompleteVoiceMailNumberForSubscriber(getDefaultSubscription());
     }
 
     public String getCompleteVoiceMailNumberForSubscriber(int subId) {
@@ -202,7 +202,7 @@ public class PhoneSubInfoController extends IPhoneSubInfo.Stub {
     }
 
     public String getVoiceMailAlphaTag() {
-        return getVoiceMailAlphaTagForSubscriber(getDefaultVoiceSubId());
+        return getVoiceMailAlphaTagForSubscriber(getDefaultSubscription());
     }
 
     public String getVoiceMailAlphaTagForSubscriber(int subId) {

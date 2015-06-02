@@ -208,7 +208,7 @@ public class ModemStackController extends Handler {
                         + " status: " + status);
                 if (mDeactivationInProgress && (status == PhoneConstants.FAILURE)) {
                     // Sub deactivation failed
-                    Message msg = obtainMessage(EVENT_SUB_DEACTIVATED, new Integer(phoneId));
+                    Message msg = obtainMessage(EVENT_SUB_DEACTIVATED, new Integer(subId));
                     AsyncResult.forMessage(msg, SubscriptionStatus.SUB_ACTIVATED, null);
                     sendMessage(msg);
                 }
