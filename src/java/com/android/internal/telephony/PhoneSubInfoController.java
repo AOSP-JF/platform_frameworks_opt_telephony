@@ -44,7 +44,7 @@ public class PhoneSubInfoController extends IPhoneSubInfo.Stub {
 
     // Use first phoneId to return unique value always
     public String getDeviceId() {
-        return getDeviceIdForPhone(PhoneConstants.PHONE_ID1);
+        return getDeviceIdForPhone(SubscriptionManager.getPhoneId(getDefaultSubscription()));
     }
 
     public String getDeviceIdForPhone(int phoneId) {
@@ -241,16 +241,6 @@ public class PhoneSubInfoController extends IPhoneSubInfo.Stub {
 
     private int getDefaultSubscription() {
         return  SubscriptionController.getInstance().getDefaultSubId();
-    }
-
-    private int getDefaultVoiceSubId() {
-        return  SubscriptionController.getInstance().getDefaultVoiceSubId();
-    }
-
-    private int getFirstPhoneSubId() {
-        // get subId from first Phone/slot Id(i.e 0)
-        int[] subId = SubscriptionController.getInstance().getSubId(PhoneConstants.PHONE_ID1);
-        return  subId[0];
     }
 
     public String getIsimImpi() {

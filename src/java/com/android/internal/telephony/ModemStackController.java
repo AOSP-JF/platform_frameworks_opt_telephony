@@ -198,29 +198,14 @@ public class ModemStackController extends Handler {
                 int intValue = intent.getIntExtra(TelephonyIntents.EXTRA_INT_CONTENT, 0);
                 logd("Received ACTION_SUBINFO_CONTENT_CHANGE on subId: " + subId
                         + "for " + column + " intValue: " + intValue);
-
-                if (mDeactivationInProgress && column != null
-                        && column.equals(SubscriptionManager.SUB_STATE)) {
-                        int phoneId = SubscriptionController.getInstance().getPhoneId(subId);
-                    if (intValue == SubscriptionManager.INACTIVE &&
-                            mSubcriptionStatus.get(phoneId)== SubscriptionManager.ACTIVE) {
-
-                        //deactivated the activated sub
-                        Message msg = obtainMessage(EVENT_SUB_DEACTIVATED, new Integer(phoneId));
-                        AsyncResult.forMessage(msg, SubscriptionStatus.SUB_DEACTIVATED, null);
-                        sendMessage(msg);
-                    }
-                }
             } else if (TelephonyIntents.ACTION_SUBSCRIPTION_SET_UICC_RESULT.
                     equals(intent.getAction())) {
                 int subId = intent.getIntExtra(PhoneConstants.SUBSCRIPTION_KEY,
                         SubscriptionManager.INVALID_SUBSCRIPTION_ID);
-                int phoneId = intent.getIntExtra(PhoneConstants.PHONE_KEY,
-                        PhoneConstants.PHONE_ID1);
                 int status = intent.getIntExtra(TelephonyIntents.EXTRA_RESULT,
                         PhoneConstants.FAILURE);
                 logd("Received ACTION_SUBSCRIPTION_SET_UICC_RESULT on subId: " + subId
-                        + "phoneId " + phoneId + " status: " + status);
+                        + " status: " + status);
                 if (mDeactivationInProgress && (status == PhoneConstants.FAILURE)) {
                     // Sub deactivation failed
                     Message msg = obtainMessage(EVENT_SUB_DEACTIVATED, new Integer(phoneId));
