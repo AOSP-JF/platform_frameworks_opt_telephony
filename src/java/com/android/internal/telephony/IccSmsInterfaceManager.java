@@ -24,9 +24,8 @@ import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteException;
 import android.net.Uri;
-import android.os.Binder;
-import android.os.RemoteException;
 import android.os.AsyncResult;
+import android.os.Binder;
 import android.os.Handler;
 import android.os.Message;
 import android.os.UserManager;
@@ -34,7 +33,6 @@ import android.provider.Telephony;
 import android.telephony.Rlog;
 import android.telephony.SmsManager;
 import android.telephony.SmsMessage;
-import android.telephony.TelephonyManager;
 import android.util.Log;
 
 import com.android.internal.telephony.gsm.SmsBroadcastConfigInfo;
@@ -42,7 +40,7 @@ import com.android.internal.telephony.cdma.CdmaSmsBroadcastConfigInfo;
 import com.android.internal.telephony.uicc.IccConstants;
 import com.android.internal.telephony.uicc.IccFileHandler;
 import com.android.internal.telephony.uicc.UiccController;
-import com.android.internal.telephony.uicc.IccRecords;
+import com.android.internal.telephony.SmsNumberUtils;
 import com.android.internal.util.HexDump;
 
 import java.util.ArrayList;
@@ -61,15 +59,11 @@ import android.telephony.TelephonyManager;
  */
 public class IccSmsInterfaceManager {
     static final String LOG_TAG = "IccSmsInterfaceManager";
-    static final boolean DBG = false;
+    static final boolean DBG = true;
 
     protected final Object mLock = new Object();
     protected boolean mSuccess;
     private List<SmsRawData> mSms;
-    private String mSmscAddress = null;
-    private boolean mSmscSuccess = false;
-    private final Object mGetSmscLock = new Object();
-    private final Object mSetSmscLock = new Object();
 
     private CellBroadcastRangeManager mCellBroadcastRangeManager =
             new CellBroadcastRangeManager();
@@ -80,8 +74,6 @@ public class IccSmsInterfaceManager {
     private static final int EVENT_UPDATE_DONE = 2;
     protected static final int EVENT_SET_BROADCAST_ACTIVATION_DONE = 3;
     protected static final int EVENT_SET_BROADCAST_CONFIG_DONE = 4;
-    protected static final int EVENT_GET_SMSC_ADDRESS_DONE = 5;
-    protected static final int EVENT_SET_SMSC_ADDRESS_DONE = 6;
     private static final int SMS_CB_CODE_SCHEME_MIN = 0;
     private static final int SMS_CB_CODE_SCHEME_MAX = 255;
 
@@ -127,27 +119,6 @@ public class IccSmsInterfaceManager {
                     synchronized (mLock) {
                         mSuccess = (ar.exception == null);
                         mLock.notifyAll();
-                    }
-                    break;
-                case EVENT_GET_SMSC_ADDRESS_DONE:
-                    ar = (AsyncResult) msg.obj;
-                    synchronized (mGetSmscLock) {
-                        if (ar.exception == null) {
-                            mSmscAddress = (String) ar.result;
-                        } else {
-                            if (Rlog.isLoggable("SMS", Log.DEBUG)) {
-                                log("Load Smsc failed");
-                            }
-                            mSmscAddress = null;
-                        }
-                        mGetSmscLock.notifyAll();
-                    }
-                    break;
-                case EVENT_SET_SMSC_ADDRESS_DONE:
-                    ar = (AsyncResult) msg.obj;
-                    synchronized (mSetSmscLock) {
-                        mSmscSuccess = (ar.exception == null);
-                        mSetSmscLock.notifyAll();
                     }
                     break;
             }
@@ -306,9 +277,6 @@ public class IccSmsInterfaceManager {
         return mSuccess;
     }
 
-    public void synthesizeMessages(String originatingAddress, String scAddress, List<String> messages, long timestampMillis) throws RemoteException {
-    }
-
     /**
      * Retrieves all messages currently stored on Icc.
      *
@@ -321,6 +289,10 @@ public class IccSmsInterfaceManager {
         mContext.enforceCallingOrSelfPermission(
                 Manifest.permission.RECEIVE_SMS,
                 "Reading messages from Icc");
+        if (mAppOps.noteOp(AppOpsManager.OP_READ_ICC_SMS, Binder.getCallingUid(),
+                callingPackage) != AppOpsManager.MODE_ALLOWED) {
+            return new ArrayList<SmsRawData>();
+        }
         synchronized(mLock) {
 
             IccFileHandler fh = mPhone.getIccFileHandler();
@@ -385,54 +357,7 @@ public class IccSmsInterfaceManager {
             return;
         }
         destAddr = filterDestAddress(destAddr);
-        mDispatcher.sendData(destAddr, scAddr, destPort, 0, data, sentIntent, deliveryIntent);
-    }
-
-    /**
-     * Send a data based SMS to a specific application port.
-     *
-     * @param destAddr the address to send the message to
-     * @param scAddr is the service center address or null to use
-     *  the current default SMSC
-     * @param destPort the port to deliver the message to
-     * @param origPort the originator port set by sender
-     * @param data the body of the message to send
-     * @param sentIntent if not NULL this <code>PendingIntent</code> is
-     *  broadcast when the message is successfully sent, or failed.
-     *  The result code will be <code>Activity.RESULT_OK<code> for success,
-     *  or one of these errors:<br>
-     *  <code>RESULT_ERROR_GENERIC_FAILURE</code><br>
-     *  <code>RESULT_ERROR_RADIO_OFF</code><br>
-     *  <code>RESULT_ERROR_NULL_PDU</code><br>
-     *  For <code>RESULT_ERROR_GENERIC_FAILURE</code> the sentIntent may include
-     *  the extra "errorCode" containing a radio technology specific value,
-     *  generally only useful for troubleshooting.<br>
-     *  The per-application based SMS control checks sentIntent. If sentIntent
-     *  is NULL the caller will be checked against all unknown applications,
-     *  which cause smaller number of SMS to be sent in checking period.
-     * @param deliveryIntent if not NULL this <code>PendingIntent</code> is
-     *  broadcast when the message is delivered to the recipient.  The
-     *  raw pdu of the status report is in the extended data ("pdu").
-     */
-    public void sendDataWithOrigPort(String callingPackage, String destAddr, String scAddr,
-            int destPort, int origPort, byte[] data, PendingIntent sentIntent,
-            PendingIntent deliveryIntent) {
-        mPhone.getContext().enforceCallingPermission(
-                Manifest.permission.SEND_SMS,
-                "Sending SMS message");
-        if (Rlog.isLoggable("SMS", Log.VERBOSE)) {
-            log("sendDataWithOrigPort: destAddr=" + destAddr + " scAddr=" + scAddr
-                + " destPort=" +destPort + "origPort=" + origPort
-                + " data='"+ HexDump.toHexString(data) +
-                "' sentIntent=" + sentIntent + " deliveryIntent=" + deliveryIntent);
-        }
-        if (mAppOps.noteOp(AppOpsManager.OP_SEND_SMS, Binder.getCallingUid(),
-                callingPackage) != AppOpsManager.MODE_ALLOWED) {
-            return;
-        }
-        destAddr = filterDestAddress(destAddr);
-        mDispatcher.sendData(destAddr, scAddr, destPort, origPort,
-                data, sentIntent, deliveryIntent);
+        mDispatcher.sendData(destAddr, scAddr, destPort, data, sentIntent, deliveryIntent);
     }
 
     /**
@@ -462,100 +387,21 @@ public class IccSmsInterfaceManager {
 
     public void sendText(String callingPackage, String destAddr, String scAddr,
             String text, PendingIntent sentIntent, PendingIntent deliveryIntent) {
-        int callingUid = Binder.getCallingUid();
-
-        String[] callingParts = callingPackage.split("\\\\");
-        if (callingUid == android.os.Process.PHONE_UID &&
-                                         callingParts.length > 1) {
-            callingUid = Integer.parseInt(callingParts[1]);
-        }
-
-        // Reset the calling package, remove the trailing uid so
-        // shouldWriteMessageForPackage can match correctly
-        // if our message has been synthesized by an
-        // external package
-        callingPackage = callingParts[0];
-
-        if (Binder.getCallingPid() != android.os.Process.myPid()) {
-            mPhone.getContext().enforceCallingPermission(
-                    Manifest.permission.SEND_SMS,
-                    "Sending SMS message");
-        }
-        if (Rlog.isLoggable("SMS", Log.VERBOSE)) {
-            log("sendText: destAddr=" + destAddr + " scAddr=" + scAddr +
-                " text='"+ text + "' sentIntent=" +
-                sentIntent + " deliveryIntent=" + deliveryIntent);
-        }
-        if (mAppOps.noteOp(AppOpsManager.OP_SEND_SMS, callingUid,
-                callingParts[0]) != AppOpsManager.MODE_ALLOWED) {
-            return;
-        }
-        destAddr = filterDestAddress(destAddr);
-        mDispatcher.sendText(destAddr, scAddr, text, sentIntent, deliveryIntent,
-                null/*messageUri*/, callingPackage, -1, false, -1);
-    }
-
-    /**
-     * Send a text based SMS with Messaging Options.
-     *
-     * @param destAddr the address to send the message to
-     * @param scAddr is the service center address or null to use
-     *  the current default SMSC
-     * @param text the body of the message to send
-     * @param sentIntent if not NULL this <code>PendingIntent</code> is
-     *  broadcast when the message is successfully sent, or failed.
-     *  The result code will be <code>Activity.RESULT_OK<code> for success,
-     *  or one of these errors:<br>
-     *  <code>RESULT_ERROR_GENERIC_FAILURE</code><br>
-     *  <code>RESULT_ERROR_RADIO_OFF</code><br>
-     *  <code>RESULT_ERROR_NULL_PDU</code><br>
-     *  For <code>RESULT_ERROR_GENERIC_FAILURE</code> the sentIntent may include
-     *  the extra "errorCode" containing a radio technology specific value,
-     *  generally only useful for troubleshooting.<br>
-     *  The per-application based SMS control checks sentIntent. If sentIntent
-     *  is NULL the caller will be checked against all unknown applications,
-     *  which cause smaller number of SMS to be sent in checking period.
-     * @param deliveryIntent if not NULL this <code>PendingIntent</code> is
-     *  broadcast when the message is delivered to the recipient.  The
-     *  raw pdu of the status report is in the extended data ("pdu").
-     * @param priority Priority level of the message
-     *  Refer specification See 3GPP2 C.S0015-B, v2.0, table 4.5.9-1
-     *  ---------------------------------
-     *  PRIORITY      | Level of Priority
-     *  ---------------------------------
-     *      '00'      |     Normal
-     *      '01'      |     Interactive
-     *      '10'      |     Urgent
-     *      '11'      |     Emergency
-     *  ----------------------------------
-     *  Any Other values included Negative considered as Invalid Priority Indicator of the message.
-     * @param isExpectMore is a boolean to indicate the sending message is multi segmented or not.
-     * @param validityPeriod Validity Period of the message in mins.
-     *  Refer specification 3GPP TS 23.040 V6.8.1 section 9.2.3.12.1.
-     *  Validity Period(Minimum) -> 5 mins
-     *  Validity Period(Maximum) -> 635040 mins(i.e.63 weeks).
-     *  Any Other values included Negative considered as Invalid Validity Period of the message.
-     */
-
-    public void sendTextWithOptions(String callingPackage, String destAddr, String scAddr,
-            String text, PendingIntent sentIntent, PendingIntent deliveryIntent,
-            int priority, boolean isExpectMore, int validityPeriod) {
         mPhone.getContext().enforceCallingPermission(
                 Manifest.permission.SEND_SMS,
                 "Sending SMS message");
         if (Rlog.isLoggable("SMS", Log.VERBOSE)) {
             log("sendText: destAddr=" + destAddr + " scAddr=" + scAddr +
                 " text='"+ text + "' sentIntent=" +
-                sentIntent + " deliveryIntent=" + deliveryIntent +
-                "validityPeriod" + validityPeriod);
+                sentIntent + " deliveryIntent=" + deliveryIntent);
         }
         if (mAppOps.noteOp(AppOpsManager.OP_SEND_SMS, Binder.getCallingUid(),
                 callingPackage) != AppOpsManager.MODE_ALLOWED) {
             return;
         }
+        destAddr = filterDestAddress(destAddr);
         mDispatcher.sendText(destAddr, scAddr, text, sentIntent, deliveryIntent,
-                null/*messageUri*/, callingPackage, priority,
-                isExpectMore, validityPeriod);
+                null/*messageUri*/, callingPackage);
     }
 
     /**
@@ -607,25 +453,9 @@ public class IccSmsInterfaceManager {
     public void sendMultipartText(String callingPackage, String destAddr, String scAddr,
             List<String> parts, List<PendingIntent> sentIntents,
             List<PendingIntent> deliveryIntents) {
-        int callingUid = Binder.getCallingUid();
-
-        String[] callingParts = callingPackage.split("\\\\");
-        if (callingUid == android.os.Process.PHONE_UID &&
-                                         callingParts.length > 1) {
-            callingUid = Integer.parseInt(callingParts[1]);
-        }
-
-        // Reset the calling package, remove the trailing uid so
-        // shouldWriteMessageForPackage can match correctly
-        // if our message has been synthesized by an
-        // external package
-        callingPackage = callingParts[0];
-
-        if (Binder.getCallingPid() != android.os.Process.myPid()) {
-            mPhone.getContext().enforceCallingPermission(
-                    Manifest.permission.SEND_SMS,
-                    "Sending SMS message");
-        }
+        mPhone.getContext().enforceCallingPermission(
+                Manifest.permission.SEND_SMS,
+                "Sending SMS message");
         if (Rlog.isLoggable("SMS", Log.VERBOSE)) {
             int i = 0;
             for (String part : parts) {
@@ -633,8 +463,8 @@ public class IccSmsInterfaceManager {
                         ", part[" + (i++) + "]=" + part);
             }
         }
-        if (mAppOps.noteOp(AppOpsManager.OP_SEND_SMS, callingUid,
-                callingParts[0]) != AppOpsManager.MODE_ALLOWED) {
+        if (mAppOps.noteOp(AppOpsManager.OP_SEND_SMS, Binder.getCallingUid(),
+                callingPackage) != AppOpsManager.MODE_ALLOWED) {
             return;
         }
 
@@ -663,84 +493,16 @@ public class IccSmsInterfaceManager {
 
                 mDispatcher.sendText(destAddr, scAddr, singlePart,
                         singleSentIntent, singleDeliveryIntent,
-                        null/*messageUri*/, callingPackage, -1, false, -1);
+                        null/*messageUri*/, callingPackage);
             }
             return;
         }
 
         mDispatcher.sendMultipartText(destAddr, scAddr, (ArrayList<String>) parts,
                 (ArrayList<PendingIntent>) sentIntents, (ArrayList<PendingIntent>) deliveryIntents,
-                null/*messageUri*/, callingPackage, -1, false, -1);
+                null/*messageUri*/, callingPackage);
     }
 
-    /**
-     * Send a multi-part text based SMS with Messaging Options.
-     *
-     * @param destAddr the address to send the message to
-     * @param scAddr is the service center address or null to use
-     *   the current default SMSC
-     * @param parts an <code>ArrayList</code> of strings that, in order,
-     *   comprise the original message
-     * @param sentIntents if not null, an <code>ArrayList</code> of
-     *   <code>PendingIntent</code>s (one for each message part) that is
-     *   broadcast when the corresponding message part has been sent.
-     *   The result code will be <code>Activity.RESULT_OK<code> for success,
-     *   or one of these errors:
-     *   <code>RESULT_ERROR_GENERIC_FAILURE</code>
-     *   <code>RESULT_ERROR_RADIO_OFF</code>
-     *   <code>RESULT_ERROR_NULL_PDU</code>.
-     *  The per-application based SMS control checks sentIntent. If sentIntent
-     *  is NULL the caller will be checked against all unknown applications,
-     *  which cause smaller number of SMS to be sent in checking period.
-     * @param deliveryIntents if not null, an <code>ArrayList</code> of
-     *   <code>PendingIntent</code>s (one for each message part) that is
-     *   broadcast when the corresponding message part has been delivered
-     *   to the recipient.  The raw pdu of the status report is in the
-     *   extended data ("pdu").
-     * @param priority Priority level of the message
-     *  Refer specification See 3GPP2 C.S0015-B, v2.0, table 4.5.9-1
-     *  ---------------------------------
-     *  PRIORITY      | Level of Priority
-     *  ---------------------------------
-     *      '00'      |     Normal
-     *      '01'      |     Interactive
-     *      '10'      |     Urgent
-     *      '11'      |     Emergency
-     *  ----------------------------------
-     *  Any Other values included Negative considered as Invalid Priority Indicator of the message.
-     * @param isExpectMore is a boolean to indicate the sending message is multi segmented or not.
-     * @param validityPeriod Validity Period of the message in mins.
-     *  Refer specification 3GPP TS 23.040 V6.8.1 section 9.2.3.12.1.
-     *  Validity Period(Minimum) -> 5 mins
-     *  Validity Period(Maximum) -> 635040 mins(i.e.63 weeks).
-     *  Any Other values included Negative considered as Invalid Validity Period of the message.
-     */
-
-    public void sendMultipartTextWithOptions(String callingPackage, String destAddr,
-            String scAddr, List<String> parts, List<PendingIntent> sentIntents,
-            List<PendingIntent> deliveryIntents, int priority, boolean isExpectMore,
-            int validityPeriod) {
-        mPhone.getContext().enforceCallingPermission(
-                Manifest.permission.SEND_SMS,
-                "Sending SMS message");
-        if (Rlog.isLoggable("SMS", Log.VERBOSE)) {
-            int i = 0;
-            for (String part : parts) {
-                log("sendMultipartTextWithOptions: destAddr=" + destAddr + ", srAddr=" + scAddr +
-                        ", part[" + (i++) + "]=" + part);
-            }
-        }
-        if (mAppOps.noteOp(AppOpsManager.OP_SEND_SMS, Binder.getCallingUid(),
-                callingPackage) != AppOpsManager.MODE_ALLOWED) {
-            return;
-        }
-        mDispatcher.sendMultipartText(destAddr,
-                                      scAddr,
-                                      (ArrayList<String>) parts,
-                                      (ArrayList<PendingIntent>) sentIntents,
-                                      (ArrayList<PendingIntent>) deliveryIntents,
-                                      null, callingPackage, priority, isExpectMore, validityPeriod);
-    }
 
     public int getPremiumSmsPermission(String packageName) {
         return mDispatcher.getPremiumSmsPermission(packageName);
@@ -831,6 +593,7 @@ public class IccSmsInterfaceManager {
             throw new IllegalArgumentException("Not a supportted RAN Type");
         }
     }
+
     synchronized public boolean enableGsmBroadcastRange(int startMessageId, int endMessageId) {
         if (DBG) log("enableGsmBroadcastRange");
 
@@ -1137,7 +900,7 @@ public class IccSmsInterfaceManager {
         }
         textAndAddress[1] = filterDestAddress(textAndAddress[1]);
         mDispatcher.sendText(textAndAddress[1], scAddress, textAndAddress[0],
-                sentIntent, deliveryIntent, messageUri, callingPkg, -1, false, -1);
+                sentIntent, deliveryIntent, messageUri, callingPkg);
     }
 
     public void sendStoredMultipartText(String callingPkg, Uri messageUri, String scAddress,
@@ -1192,8 +955,7 @@ public class IccSmsInterfaceManager {
                 }
 
                 mDispatcher.sendText(textAndAddress[1], scAddress, singlePart,
-                        singleSentIntent, singleDeliveryIntent, messageUri, callingPkg,
-                        -1, false, -1);
+                        singleSentIntent, singleDeliveryIntent, messageUri, callingPkg);
             }
             return;
         }
@@ -1205,7 +967,7 @@ public class IccSmsInterfaceManager {
                 (ArrayList<PendingIntent>) sentIntents,
                 (ArrayList<PendingIntent>) deliveryIntents,
                 messageUri,
-                callingPkg, -1, false, -1);
+                callingPkg);
     }
 
     private boolean isFailedOrDraft(ContentResolver resolver, Uri messageUri) {
@@ -1305,73 +1067,4 @@ public class IccSmsInterfaceManager {
         return result != null ? result : destAddr;
     }
 
-    public int getSmsCapacityOnIcc() {
-        int numberOnIcc = -1;
-        IccRecords ir = mPhone.getIccRecords();
-
-        if (ir != null) {
-            numberOnIcc = ir.getSmsCapacityOnIcc();
-        } else {
-            log("getSmsCapacityOnIcc - aborting, no icc card present.");
-        }
-
-        log("getSmsCapacityOnIcc().numberOnIcc = " + numberOnIcc);
-        return numberOnIcc;
-    }
-
-    public String getSmscAddressFromIcc() {
-        synchronized (mGetSmscLock) {
-            Message response = mHandler.obtainMessage(EVENT_GET_SMSC_ADDRESS_DONE);
-
-            mPhone.getSmscAddress(response);
-
-            try {
-                mGetSmscLock.wait();
-            } catch (InterruptedException e) {
-                log("interrupted while trying to get SMSC address");
-            }
-
-            return mSmscAddress;
-        }
-    }
-
-    public boolean setSmscAddressToIcc(String scAddress) {
-        synchronized (mSetSmscLock) {
-            Message response = mHandler.obtainMessage(EVENT_SET_SMSC_ADDRESS_DONE);
-
-            mSmscSuccess = false;
-            mPhone.setSmscAddress(scAddress, response);
-
-            try {
-                mSetSmscLock.wait();
-            } catch (InterruptedException e) {
-                log("interrupted while trying to set SMSC address");
-            }
-        }
-        return mSmscSuccess;
-    }
-
-    /** @hide **/
-    public boolean isShortSMSCode(String destAddr) {
-        TelephonyManager telephonyManager;
-        int smsCategory = SmsUsageMonitor.CATEGORY_NOT_SHORT_CODE;
-
-        telephonyManager =(TelephonyManager) mContext.getSystemService(Context.TELEPHONY_SERVICE);
-
-        String countryIso = telephonyManager.getSimCountryIso();
-        if (countryIso == null || countryIso.length() != 2) {
-            countryIso = telephonyManager.getNetworkCountryIso();
-        }
-
-        smsCategory = SmsUsageMonitor.mergeShortCodeCategories(smsCategory,
-                mPhone.mSmsUsageMonitor.checkDestination(destAddr, countryIso));
-
-        if (smsCategory == SmsUsageMonitor.CATEGORY_NOT_SHORT_CODE
-                || smsCategory == SmsUsageMonitor.CATEGORY_FREE_SHORT_CODE
-                || smsCategory == SmsUsageMonitor.CATEGORY_STANDARD_SHORT_CODE) {
-            return false;    // not a premium short code
-        }
-
-        return true;
-    }
 }

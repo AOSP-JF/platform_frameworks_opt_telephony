@@ -49,7 +49,6 @@ import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.preference.PreferenceManager;
-import android.provider.Settings;
 import android.provider.Telephony;
 import android.provider.Telephony.Sms.Intents;
 import android.service.carrier.CarrierMessagingService;
@@ -66,19 +65,14 @@ import android.text.TextUtils;
 
 import com.android.internal.telephony.uicc.UiccCard;
 import com.android.internal.telephony.uicc.UiccController;
-import android.text.TextUtils;
-import com.android.internal.telephony.PhoneBase;
 import com.android.internal.util.HexDump;
 import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
 
 import java.io.ByteArrayOutputStream;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
 /**
  * This class broadcasts incoming SMS messages to interested apps after storing them in
@@ -212,8 +206,8 @@ public abstract class InboundSmsHandler extends StateMachine {
 
         boolean smsCapable = mContext.getResources().getBoolean(
                 com.android.internal.R.bool.config_sms_capable);
-        mSmsReceiveDisabled = !SystemProperties.getBoolean(
-                TelephonyProperties.PROPERTY_SMS_RECEIVE, smsCapable);
+        mSmsReceiveDisabled = !TelephonyManager.from(mContext).getSmsReceiveCapableForPhone(
+                mPhone.getPhoneId(), smsCapable);
 
         PowerManager pm = (PowerManager) mContext.getSystemService(Context.POWER_SERVICE);
         mWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, name);
@@ -600,7 +594,7 @@ public abstract class InboundSmsHandler extends StateMachine {
         }
         acknowledgeLastIncomingSms(success, result, response);
     }
-    
+
     /**
      * Return true if this handler is for 3GPP2 messages; false for 3GPP format.
      * @return true for the 3GPP2 handler; false for the 3GPP handler
@@ -617,7 +611,6 @@ public abstract class InboundSmsHandler extends StateMachine {
      * @return {@link Intents#RESULT_SMS_HANDLED} if the message was accepted, or an error status
      */
     protected int dispatchNormalMessage(SmsMessageBase sms) {
-
         SmsHeader smsHeader = sms.getUserDataHeader();
         InboundSmsTracker tracker;
 
@@ -680,7 +673,6 @@ public abstract class InboundSmsHandler extends StateMachine {
         int messageCount = tracker.getMessageCount();
         byte[][] pdus;
         int destPort = tracker.getDestPort();
-        String address = "";
 
         if (messageCount == 1) {
             // single-part message
@@ -690,7 +682,7 @@ public abstract class InboundSmsHandler extends StateMachine {
             Cursor cursor = null;
             try {
                 // used by several query selection arguments
-                address = tracker.getAddress();
+                String address = tracker.getAddress();
                 String refNumber = Integer.toString(tracker.getReferenceNumber());
                 String count = Integer.toString(tracker.getMessageCount());
 
@@ -748,16 +740,10 @@ public abstract class InboundSmsHandler extends StateMachine {
                 if (!tracker.is3gpp2()) {
                     SmsMessage msg = SmsMessage.createFromPdu(pdu, SmsConstants.FORMAT_3GPP);
                     pdu = msg.getUserData();
-                    if (address == "") {
-                       address = msg.getOriginatingAddress();
-                    } else if(address == ""){
-                       address = tracker.getAddress();
-                    }
                 }
                 output.write(pdu, 0, pdu.length);
             }
-            int result = mWapPush.dispatchWapPdu(output.toByteArray(), resultReceiver,
-                    this, address);
+            int result = mWapPush.dispatchWapPdu(output.toByteArray(), resultReceiver, this);
             if (DBG) log("dispatchWapPdu() returned " + result);
             // result is Activity.RESULT_OK if an ordered broadcast was sent
             return (result == Activity.RESULT_OK);
@@ -1022,13 +1008,12 @@ public abstract class InboundSmsHandler extends StateMachine {
         log("Storing Voice Mail Count = " + mwi
                     + " for mVmCountKey = " + mPhone.VM_COUNT
                     + " vmId = " + mPhone.VM_ID
-                    + " subId = "+ mPhone.getSubId()
                     + " in preferences.");
 
         SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(mContext);
         SharedPreferences.Editor editor = sp.edit();
-        editor.putInt(mPhone.VM_COUNT + mPhone.getSubId(), mwi);
-        editor.putString(mPhone.VM_ID + mPhone.getSubId(), imsi);
+        editor.putInt(mPhone.VM_COUNT, mwi);
+        editor.putString(mPhone.VM_ID, imsi);
         editor.commit();
     }
 

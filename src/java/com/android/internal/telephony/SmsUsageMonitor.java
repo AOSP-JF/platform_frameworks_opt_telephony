@@ -22,7 +22,6 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.res.XmlResourceParser;
 import android.database.ContentObserver;
-import android.net.Uri;
 import android.os.Binder;
 import android.os.Handler;
 import android.os.Process;
@@ -70,7 +69,7 @@ public class SmsUsageMonitor {
     private static final String SHORT_CODE_PATH = "/data/misc/sms/codes";
 
     /** Default checking period for SMS sent without user permission. */
-    private static final int DEFAULT_SMS_CHECK_PERIOD = 15 * 60 * 1000;      // 15 minutes
+    private static final int DEFAULT_SMS_CHECK_PERIOD = 60000;      // 1 minute
 
     /** Default number of SMS sent in checking period without user permission. */
     private static final int DEFAULT_SMS_MAX_COUNT = 30;
@@ -108,8 +107,8 @@ public class SmsUsageMonitor {
     /** Premium SMS permission when the owner has allowed the app to send premium SMS. */
     public static final int PREMIUM_SMS_PERMISSION_ALWAYS_ALLOW = 3;
 
-    private int mCheckPeriod;
-    private int mMaxAllowed;
+    private final int mCheckPeriod;
+    private final int mMaxAllowed;
 
     private final HashMap<String, ArrayList<Long>> mSmsStamp =
             new HashMap<String, ArrayList<Long>>();
@@ -128,9 +127,6 @@ public class SmsUsageMonitor {
 
     /** Handler for responding to content observer updates. */
     private final SettingsObserverHandler mSettingsObserverHandler;
-
-    /** Handler for responding to content observer updates sms limits. */
-    private final SmsLimitObserverHandler mSmsLimitObserverHandler;
 
     /** File holding the patterns */
     private final File mPatternFile = new File(SHORT_CODE_PATH);
@@ -254,56 +250,20 @@ public class SmsUsageMonitor {
     }
 
     /**
-     * Observe the global setting for sms limits
-     */
-    private class SmsLimitObserver extends ContentObserver {
-        private final Context mContext;
-
-        SmsLimitObserver(Handler handler, Context context) {
-            super(handler);
-            mContext = context;
-            onChange(false);
-        }
-
-        @Override
-        public void onChange(boolean selfChange) {
-            onChange(selfChange, null);
-        }
-
-        @Override
-        public void onChange(boolean selfChange, Uri uri) {
-            ContentResolver resolver = mContext.getContentResolver();
-            mMaxAllowed = Settings.Global.getInt(resolver,
-                    Settings.Global.SMS_OUTGOING_CHECK_MAX_COUNT,
-                    DEFAULT_SMS_MAX_COUNT);
-
-            mCheckPeriod = Settings.Global.getInt(resolver,
-                    Settings.Global.SMS_OUTGOING_CHECK_INTERVAL_MS,
-                    DEFAULT_SMS_CHECK_PERIOD);
-        }
-    }
-
-    private class SmsLimitObserverHandler extends Handler {
-        SmsLimitObserverHandler(Context context) {
-            ContentResolver resolver = context.getContentResolver();
-
-            ContentObserver globalObserver = new SmsLimitObserver(this, context);
-
-            resolver.registerContentObserver(Settings.Global.getUriFor(
-                    Settings.Global.SMS_OUTGOING_CHECK_MAX_COUNT), false, globalObserver);
-            resolver.registerContentObserver(Settings.Global.getUriFor(
-                    Settings.Global.SMS_OUTGOING_CHECK_INTERVAL_MS), false, globalObserver);
-        }
-    }
-
-    /**
      * Create SMS usage monitor.
      * @param context the context to use to load resources and get TelephonyManager service
      */
     public SmsUsageMonitor(Context context) {
         mContext = context;
+        ContentResolver resolver = context.getContentResolver();
 
-        mSmsLimitObserverHandler = new SmsLimitObserverHandler(mContext);
+        mMaxAllowed = Settings.Global.getInt(resolver,
+                Settings.Global.SMS_OUTGOING_CHECK_MAX_COUNT,
+                DEFAULT_SMS_MAX_COUNT);
+
+        mCheckPeriod = Settings.Global.getInt(resolver,
+                Settings.Global.SMS_OUTGOING_CHECK_INTERVAL_MS,
+                DEFAULT_SMS_CHECK_PERIOD);
 
         mSettingsObserverHandler = new SettingsObserverHandler(mContext, mCheckEnabled);
 
@@ -580,7 +540,7 @@ public class SmsUsageMonitor {
      * @throws SecurityException if the caller is not a system process
      */
     public int getPremiumSmsPermission(String packageName) {
-        checkCallerIsSystemOrSameApp(packageName);
+        checkCallerIsSystemOrPhoneOrSameApp(packageName);
         synchronized (mPremiumSmsPolicy) {
             Integer policy = mPremiumSmsPolicy.get(packageName);
             if (policy == null) {
@@ -618,9 +578,10 @@ public class SmsUsageMonitor {
         }).start();
     }
 
-    private static void checkCallerIsSystemOrSameApp(String pkg) {
+    private static void checkCallerIsSystemOrPhoneOrSameApp(String pkg) {
         int uid = Binder.getCallingUid();
-        if (UserHandle.getAppId(uid) == Process.SYSTEM_UID || uid == 0) {
+        int appId = UserHandle.getAppId(uid);
+        if (appId == Process.SYSTEM_UID || appId == Process.PHONE_UID || uid == 0) {
             return;
         }
         try {

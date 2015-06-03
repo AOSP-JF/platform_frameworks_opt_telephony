@@ -19,7 +19,6 @@ package android.telephony;
 import android.os.Binder;
 import android.os.Parcel;
 import android.content.res.Resources;
-import android.telephony.SubscriptionManager;
 import android.text.TextUtils;
 
 import com.android.internal.telephony.GsmAlphabet;
@@ -93,12 +92,6 @@ public class SmsMessage {
      * @hide pending API council approval
      */
     public static final String FORMAT_3GPP2 = "3gpp2";
-
-    /**
-     * Indicates a synthetic SMS message.
-     * @hide
-     */
-    public static final String FORMAT_SYNTHETIC = "synthetic";
 
     /** Contains actual SmsMessage. Only public for debugging and for framework layer.
      *
@@ -175,9 +168,6 @@ public class SmsMessage {
         int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
         String format = (PHONE_TYPE_CDMA == activePhone) ?
                 SmsConstants.FORMAT_3GPP2 : SmsConstants.FORMAT_3GPP;
-        if (com.android.internal.telephony.SyntheticSmsMessage.isSyntheticPdu(pdu)) {
-            format = FORMAT_SYNTHETIC;
-        }
         message = createFromPdu(pdu, format);
 
         if (null == message || null == message.mWrappedSmsMessage) {
@@ -206,8 +196,6 @@ public class SmsMessage {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.createFromPdu(pdu);
         } else if (SmsConstants.FORMAT_3GPP.equals(format)) {
             wrappedMessage = com.android.internal.telephony.gsm.SmsMessage.createFromPdu(pdu);
-        } else if (FORMAT_SYNTHETIC.equals(format)) {
-            wrappedMessage = com.android.internal.telephony.SyntheticSmsMessage.createFromPdu(pdu);
         } else {
             Rlog.e(LOG_TAG, "createFromPdu(): unsupported message format " + format);
             return null;
@@ -265,32 +253,6 @@ public class SmsMessage {
 
         return wrappedMessage != null ? new SmsMessage(wrappedMessage) : null;
     }
-
-    /**
-     * Create an SmsMessage from an SMS EF record.
-     *
-     * @param index Index of SMS record. This should be index in ArrayList
-     *              returned by SmsManager.getAllMessagesFromSim + 1.
-     * @param data Record data.
-     * @param subId Subscription Id of the SMS
-     * @return An SmsMessage representing the record.
-     *
-     * @hide
-     */
-    public static SmsMessage createFromEfRecord(int index, byte[] data, int subId) {
-        SmsMessageBase wrappedMessage;
-
-        if (isCdmaVoice(subId)) {
-            wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.createFromEfRecord(
-                    index, data);
-        } else {
-            wrappedMessage = com.android.internal.telephony.gsm.SmsMessage.createFromEfRecord(
-                    index, data);
-        }
-
-        return wrappedMessage != null ? new SmsMessage(wrappedMessage) : null;
-    }
-
 
     /**
      * Get the TP-Layer-Length for the given SMS-SUBMIT PDU Basically, the
@@ -502,31 +464,6 @@ public class SmsMessage {
     }
 
     /**
-     * Get an SMS-SUBMIT PDU for a destination address and a message.
-     * This method will not attempt to use any GSM national language 7 bit encodings.
-     *
-     * @param scAddress Service Centre address.  Null means use default.
-     * @param subId Subscription of the message
-     * @return a <code>SubmitPdu</code> containing the encoded SC
-     *         address, if applicable, and the encoded message.
-     *         Returns null on encode error.
-     * @hide
-     */
-    public static SubmitPdu getSubmitPdu(String scAddress,
-            String destinationAddress, String message, boolean statusReportRequested, int subId) {
-        SubmitPduBase spb;
-        if (useCdmaFormatForMoSms(subId)) {
-            spb = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(scAddress,
-                    destinationAddress, message, statusReportRequested, null);
-        } else {
-            spb = com.android.internal.telephony.gsm.SmsMessage.getSubmitPdu(scAddress,
-                    destinationAddress, message, statusReportRequested);
-        }
-
-        return new SubmitPdu(spb);
-    }
-
-    /**
      * Get an SMS-SUBMIT PDU for a data message to a destination address &amp; port.
      * This method will not attempt to use any GSM national language 7 bit encodings.
      *
@@ -568,7 +505,7 @@ public class SmsMessage {
      * form or null if unavailable
      */
     public String getOriginatingAddress() {
-        return mWrappedSmsMessage != null ? mWrappedSmsMessage.getOriginatingAddress() : null;
+        return mWrappedSmsMessage.getOriginatingAddress();
     }
 
     /**
@@ -808,33 +745,12 @@ public class SmsMessage {
      * @return true if Cdma format should be used for MO SMS, false otherwise.
      */
     private static boolean useCdmaFormatForMoSms() {
-        SmsManager smsManager = SmsManager.getSmsManagerForSubscriptionId(
-                SubscriptionManager.getDefaultSmsSubId());
-        if (!smsManager.isImsSmsSupported()) {
+        if (!SmsManager.getDefault().isImsSmsSupported()) {
             // use Voice technology to determine SMS format.
             return isCdmaVoice();
         }
         // IMS is registered with SMS support, check the SMS format supported
-        return (SmsConstants.FORMAT_3GPP2.equals(smsManager.getImsSmsFormat()));
-    }
-
-    /**
-     * Determines whether or not to use CDMA format for MO SMS.
-     * If SMS over IMS is supported, then format is based on IMS SMS format,
-     * otherwise format is based on current phone type.
-     *
-     * @param subId Subscription for which phone type is returned.
-     *
-     * @return true if Cdma format should be used for MO SMS, false otherwise.
-     */
-    private static boolean useCdmaFormatForMoSms(int subId) {
-        SmsManager smsManager = SmsManager.getSmsManagerForSubscriptionId(subId);
-        if (!smsManager.isImsSmsSupported()) {
-            // use Voice technology to determine SMS format.
-            return isCdmaVoice(subId);
-        }
-        // IMS is registered with SMS support, check the SMS format supported
-        return (SmsConstants.FORMAT_3GPP2.equals(smsManager.getImsSmsFormat()));
+        return (SmsConstants.FORMAT_3GPP2.equals(SmsManager.getDefault().getImsSmsFormat()));
     }
 
     /**
@@ -844,17 +760,6 @@ public class SmsMessage {
      */
     private static boolean isCdmaVoice() {
         int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
-        return (PHONE_TYPE_CDMA == activePhone);
-    }
-
-    /**
-     * Determines whether or not to current phone type is cdma.
-     *
-     * @param subId Subscription Id of the SMS
-     * @return true if current phone type is cdma, false otherwise.
-     */
-    private static boolean isCdmaVoice(int subId) {
-        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType(subId);
         return (PHONE_TYPE_CDMA == activePhone);
     }
 
@@ -871,7 +776,7 @@ public class SmsMessage {
         String gid;
         final long identity = Binder.clearCallingIdentity();
         try {
-            simOperator = TelephonyManager.getDefault().getSimOperator();
+            simOperator = TelephonyManager.getDefault().getSimOperatorNumeric();
             gid = TelephonyManager.getDefault().getGroupIdLevel1();
         } finally {
             Binder.restoreCallingIdentity(identity);
@@ -901,11 +806,12 @@ public class SmsMessage {
         String gid;
         final long identity = Binder.clearCallingIdentity();
         try {
-            simOperator = TelephonyManager.getDefault().getSimOperator();
+            simOperator = TelephonyManager.getDefault().getSimOperatorNumeric();
             gid = TelephonyManager.getDefault().getGroupIdLevel1();
         } finally {
             Binder.restoreCallingIdentity(identity);
         }
+
         for (NoEmsSupportConfig currentConfig : mNoEmsSupportConfigList) {
             if (simOperator.startsWith(currentConfig.mOperatorNumber) &&
                 (TextUtils.isEmpty(currentConfig.mGid1) ||
@@ -959,14 +865,5 @@ public class SmsMessage {
         }
 
         return false;
-    }
-
-    /**
-     * {@hide}
-     * Returns the recipient address(receiver) of this SMS message in String form or null if
-     * unavailable.
-     */
-    public String getRecipientAddress() {
-        return mWrappedSmsMessage.getRecipientAddress();
     }
 }

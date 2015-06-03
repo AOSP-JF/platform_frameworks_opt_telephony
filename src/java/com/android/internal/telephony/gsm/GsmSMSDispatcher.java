@@ -36,10 +36,8 @@ import com.android.internal.telephony.SMSDispatcher;
 import com.android.internal.telephony.SmsConstants;
 import com.android.internal.telephony.SmsHeader;
 import com.android.internal.telephony.SmsUsageMonitor;
-import com.android.internal.telephony.uicc.IccConstants;
 import com.android.internal.telephony.uicc.IccRecords;
 import com.android.internal.telephony.uicc.IccUtils;
-import com.android.internal.telephony.uicc.SIMRecords;
 import com.android.internal.telephony.uicc.UiccCardApplication;
 import com.android.internal.telephony.uicc.UiccController;
 
@@ -65,7 +63,6 @@ public final class GsmSMSDispatcher extends SMSDispatcher {
             GsmInboundSmsHandler gsmInboundSmsHandler) {
         super(phone, usageMonitor, imsSMSDispatcher);
         mCi.setOnSmsStatus(this, EVENT_NEW_SMS_STATUS_REPORT, null);
-        mCi.setOnSmsOnSim(this, EVENT_SMS_ON_ICC, null);
         mGsmInboundSmsHandler = gsmInboundSmsHandler;
         mUiccController = UiccController.getInstance();
         mUiccController.registerForIccChanged(this, EVENT_ICC_CHANGED, null);
@@ -77,10 +74,6 @@ public final class GsmSMSDispatcher extends SMSDispatcher {
         super.dispose();
         mCi.unSetOnSmsStatus(this);
         mUiccController.unregisterForIccChanged(this);
-        mCi.unSetOnSmsOnSim(this);
-        if (mIccRecords.get() != null) {
-            mIccRecords.get().unregisterForNewSms(this);
-        }
     }
 
     @Override
@@ -108,12 +101,6 @@ public final class GsmSMSDispatcher extends SMSDispatcher {
 
         case EVENT_ICC_CHANGED:
             onUpdateIccAvailability();
-            break;
-
-        case EVENT_SMS_ON_ICC:
-            if (mIccRecords.get() != null) {
-                ((SIMRecords)(mIccRecords.get())).handleSmsOnIcc((AsyncResult) msg.obj);
-            }
             break;
 
         default:
@@ -162,12 +149,12 @@ public final class GsmSMSDispatcher extends SMSDispatcher {
 
     /** {@inheritDoc} */
     @Override
-    protected void sendData(String destAddr, String scAddr, int destPort, int origPort,
+    protected void sendData(String destAddr, String scAddr, int destPort,
             byte[] data, PendingIntent sentIntent, PendingIntent deliveryIntent) {
         SmsMessage.SubmitPdu pdu = SmsMessage.getSubmitPdu(
-                scAddr, destAddr, destPort, origPort, data, (deliveryIntent != null));
+                scAddr, destAddr, destPort, data, (deliveryIntent != null));
         if (pdu != null) {
-            HashMap map = getSmsTrackerMap(destAddr, scAddr, destPort, origPort, data, pdu);
+            HashMap map = getSmsTrackerMap(destAddr, scAddr, destPort, data, pdu);
             SmsTracker tracker = getSmsTracker(map, sentIntent, deliveryIntent, getFormat(),
                     null /*messageUri*/, false /*isExpectMore*/, null /*fullMessageText*/,
                     false /*isText*/);
@@ -189,15 +176,13 @@ public final class GsmSMSDispatcher extends SMSDispatcher {
     /** {@inheritDoc} */
     @Override
     protected void sendText(String destAddr, String scAddr, String text, PendingIntent sentIntent,
-            PendingIntent deliveryIntent, Uri messageUri, String callingPkg,
-            int priority, boolean isExpectMore, int validityPeriod ) {
+            PendingIntent deliveryIntent, Uri messageUri, String callingPkg) {
         SmsMessage.SubmitPdu pdu = SmsMessage.getSubmitPdu(
-                scAddr, destAddr, text, (deliveryIntent != null), validityPeriod);
+                scAddr, destAddr, text, (deliveryIntent != null));
         if (pdu != null) {
             HashMap map = getSmsTrackerMap(destAddr, scAddr, text, pdu);
             SmsTracker tracker = getSmsTracker(map, sentIntent, deliveryIntent, getFormat(),
-                    messageUri, isExpectMore, text /*fullMessageText*/,
-                    true /*isText*/, validityPeriod);
+                    messageUri, false /*isExpectMore*/, text /*fullMessageText*/, true /*isText*/);
 
             String carrierPackage = getCarrierAppPackageName();
             if (carrierPackage != null) {
@@ -231,19 +216,17 @@ public final class GsmSMSDispatcher extends SMSDispatcher {
     protected SmsTracker getNewSubmitPduTracker(String destinationAddress, String scAddress,
             String message, SmsHeader smsHeader, int encoding,
             PendingIntent sentIntent, PendingIntent deliveryIntent, boolean lastPart,
-            int priority, boolean isExpectMore, int validityPeriod,
             AtomicInteger unsentPartCount, AtomicBoolean anyPartFailed, Uri messageUri,
             String fullMessageText) {
         SmsMessage.SubmitPdu pdu = SmsMessage.getSubmitPdu(scAddress, destinationAddress,
                 message, deliveryIntent != null, SmsHeader.toByteArray(smsHeader),
-                encoding, smsHeader.languageTable, smsHeader.languageShiftTable, validityPeriod);
+                encoding, smsHeader.languageTable, smsHeader.languageShiftTable);
         if (pdu != null) {
             HashMap map =  getSmsTrackerMap(destinationAddress, scAddress,
                     message, pdu);
             return getSmsTracker(map, sentIntent,
                     deliveryIntent, getFormat(), unsentPartCount, anyPartFailed, messageUri,
-                    smsHeader, (!lastPart || isExpectMore),
-                    fullMessageText, true /*isText*/, validityPeriod);
+                    smsHeader, !lastPart, fullMessageText, true /*isText*/);
         } else {
             Rlog.e(TAG, "GsmSMSDispatcher.sendNewSubmitPdu(): getSubmitPdu() returned null");
             return null;
