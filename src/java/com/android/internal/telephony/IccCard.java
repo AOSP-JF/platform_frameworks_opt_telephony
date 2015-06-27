@@ -61,10 +61,10 @@ public interface IccCard {
     public void unregisterForAbsent(Handler h);
 
     /**
-     * Notifies handler of any transition into IccCardConstants.State.PERSO_LOCKED
+     * Notifies handler of any transition into IccCardConstants.State.NETWORK_LOCKED
      */
-    public void registerForPersoLocked(Handler h, int what, Object obj);
-    public void unregisterForPersoLocked(Handler h);
+    public void registerForNetworkLocked(Handler h, int what, Object obj);
+    public void unregisterForNetworkLocked(Handler h);
 
     /**
      * Notifies handler of any transition into IccCardConstants.State.isPinLocked()

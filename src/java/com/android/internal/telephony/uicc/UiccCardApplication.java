@@ -86,7 +86,7 @@ public class UiccCardApplication {
 
     private RegistrantList mReadyRegistrants = new RegistrantList();
     private RegistrantList mPinLockedRegistrants = new RegistrantList();
-    private RegistrantList mPersoLockedRegistrants = new RegistrantList();
+    private RegistrantList mNetworkLockedRegistrants = new RegistrantList();
 
     UiccCardApplication(UiccCard uiccCard,
                         IccCardApplicationStatus as,
@@ -147,8 +147,8 @@ public class UiccCardApplication {
             }
 
             if (mPersoSubState != oldPersoSubState &&
-                    isPersoLocked()) {
-                notifyPersoLockedRegistrantsIfNeeded(null);
+                    mPersoSubState == PersoSubState.PERSOSUBSTATE_SIM_NETWORK) {
+                notifyNetworkLockedRegistrantsIfNeeded(null);
             }
 
             if (mAppState != oldAppState) {
@@ -484,19 +484,19 @@ public class UiccCardApplication {
     }
 
     /**
-     * Notifies handler of any transition into State.PERSO_LOCKED
+     * Notifies handler of any transition into State.NETWORK_LOCKED
      */
-    public void registerForPersoLocked(Handler h, int what, Object obj) {
+    public void registerForNetworkLocked(Handler h, int what, Object obj) {
         synchronized (mLock) {
             Registrant r = new Registrant (h, what, obj);
-            mPersoLockedRegistrants.add(r);
-            notifyPersoLockedRegistrantsIfNeeded(r);
+            mNetworkLockedRegistrants.add(r);
+            notifyNetworkLockedRegistrantsIfNeeded(r);
         }
     }
 
-    public void unregisterForPersoLocked(Handler h) {
+    public void unregisterForNetworkLocked(Handler h) {
         synchronized (mLock) {
-            mPersoLockedRegistrants.remove(h);
+            mNetworkLockedRegistrants.remove(h);
         }
     }
 
@@ -560,20 +560,19 @@ public class UiccCardApplication {
      *
      * @param r Registrant to be notified. If null - all registrants will be notified
      */
-    private void notifyPersoLockedRegistrantsIfNeeded(Registrant r) {
+    private void notifyNetworkLockedRegistrantsIfNeeded(Registrant r) {
         if (mDestroyed) {
             return;
         }
 
         if (mAppState == AppState.APPSTATE_SUBSCRIPTION_PERSO &&
-                isPersoLocked()) {
-            AsyncResult ar = new AsyncResult(null, mPersoSubState.ordinal(), null);
+                mPersoSubState == PersoSubState.PERSOSUBSTATE_SIM_NETWORK) {
             if (r == null) {
-                if (DBG) log("Notifying registrants: PERSO_LOCKED");
-                mPersoLockedRegistrants.notifyRegistrants(ar);
+                if (DBG) log("Notifying registrants: NETWORK_LOCKED");
+                mNetworkLockedRegistrants.notifyRegistrants();
             } else {
-                if (DBG) log("Notifying 1 registrant: PERSO_LOCKED");
-                r.notifyRegistrant(ar);
+                if (DBG) log("Notifying 1 registrant: NETWORK_LOCKED");
+                r.notifyRegistrant(new AsyncResult(null, null, null));
             }
         }
     }
@@ -657,17 +656,6 @@ public class UiccCardApplication {
     public IccRecords getIccRecords() {
         synchronized (mLock) {
             return mIccRecords;
-        }
-    }
-
-    public boolean isPersoLocked() {
-        switch (mPersoSubState) {
-            case PERSOSUBSTATE_UNKNOWN:
-            case PERSOSUBSTATE_IN_PROGRESS:
-            case PERSOSUBSTATE_READY:
-                return false;
-            default:
-                return true;
         }
     }
 
@@ -951,10 +939,10 @@ public class UiccCardApplication {
             pw.println("  mPinLockedRegistrants[" + i + "]="
                     + ((Registrant)mPinLockedRegistrants.get(i)).getHandler());
         }
-        pw.println(" mPersoLockedRegistrants: size=" + mPersoLockedRegistrants.size());
-        for (int i = 0; i < mPersoLockedRegistrants.size(); i++) {
-            pw.println("  mPersoLockedRegistrants[" + i + "]="
-                    + ((Registrant)mPersoLockedRegistrants.get(i)).getHandler());
+        pw.println(" mNetworkLockedRegistrants: size=" + mNetworkLockedRegistrants.size());
+        for (int i = 0; i < mNetworkLockedRegistrants.size(); i++) {
+            pw.println("  mNetworkLockedRegistrants[" + i + "]="
+                    + ((Registrant)mNetworkLockedRegistrants.get(i)).getHandler());
         }
         pw.flush();
     }
