@@ -47,7 +47,6 @@ import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppType;
 import com.android.internal.telephony.uicc.IccCardStatus.CardState;
 import com.android.internal.telephony.uicc.IccCardStatus.PinState;
 import com.android.internal.telephony.cat.CatService;
-import com.android.internal.telephony.cat.CatServiceFactory;
 import com.android.internal.telephony.cdma.CDMALTEPhone;
 import com.android.internal.telephony.cdma.CDMAPhone;
 import com.android.internal.telephony.cdma.CdmaSubscriptionSourceManager;
@@ -112,7 +111,7 @@ public class UiccCard {
     public void dispose() {
         synchronized (mLock) {
             if (DBG) log("Disposing card");
-            if (mCatService != null) CatServiceFactory.disposeCatService(mPhoneId);
+            if (mCatService != null) mCatService.dispose();
             for (UiccCardApplication app : mUiccApplications) {
                 if (app != null) {
                     app.dispose();
@@ -121,7 +120,6 @@ public class UiccCard {
             mCatService = null;
             mUiccApplications = null;
             mCarrierPrivilegeRules = null;
-            mUICCConfig = null;
         }
     }
 
@@ -197,11 +195,13 @@ public class UiccCard {
         if (mUiccApplications.length > 0 && mUiccApplications[0] != null) {
             // Initialize or Reinitialize CatService
             if (mCatService == null) {
-                mCatService = CatServiceFactory.makeCatService(mCi, mContext, this, mPhoneId);
+                mCatService = CatService.getInstance(mCi, mContext, this, mPhoneId);
+            } else {
+                ((CatService)mCatService).update(mCi, mContext, this);
             }
         } else {
             if (mCatService != null) {
-                CatServiceFactory.disposeCatService(mPhoneId);
+                mCatService.dispose();
             }
             mCatService = null;
         }

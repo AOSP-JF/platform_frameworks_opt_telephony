@@ -26,13 +26,17 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Message;
 import android.os.SystemProperties;
+import android.telephony.SubscriptionManager;
+import android.telephony.TelephonyManager;
 
 import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.SubscriptionController;
 import com.android.internal.telephony.uicc.IccFileHandler;
+import com.android.internal.telephony.uicc.IccRecords;
 import com.android.internal.telephony.uicc.IccUtils;
 import com.android.internal.telephony.uicc.UiccCard;
+import com.android.internal.telephony.uicc.UiccCardApplication;
 import com.android.internal.telephony.uicc.IccCardStatus.CardState;
 import com.android.internal.telephony.uicc.IccRefreshResponse;
 import com.android.internal.telephony.uicc.UiccController;
@@ -75,6 +79,13 @@ public class CatService extends Handler implements AppInterface {
     private static final boolean DBG = false;
 
     // Class members
+    private static IccRecords mIccRecords;
+    private static UiccCardApplication mUiccApplication;
+    
+    // Service members.
+    // Protects singleton instance lazy initialization.
+    private static final Object sInstanceLock = new Object();
+    private static CatService[] sInstance = null;
     private CommandsInterface mCmdIf;
     private Context mContext;
     private CatCmdMessage mCurrntCmd = null;
@@ -103,7 +114,10 @@ public class CatService extends Handler implements AppInterface {
     static final int MSG_ID_TIMEOUT                  = 10; // Samsung STK
     static final int MSG_ID_SEND_SMS_RESULT          = 11; // Samsung STK
 
-    //Events to signal SIM REFRESH notificatations
+    // Events to signal SIM presence or absent in the device.
+    private static final int MSG_ID_ICC_RECORDS_LOADED       = 20;
+    
+    //Events to signal SIM REFRESH notifications
     private static final int MSG_ID_ICC_REFRESH  = 30;
 
     private static final int DEV_ID_KEYPAD      = 0x01;
@@ -126,11 +140,14 @@ public class CatService extends Handler implements AppInterface {
     static final int SMS_SEND_RETRY = 32810;
 
     /* For multisim catservice should not be singleton */
-    CatService(CommandsInterface ci, Context context, IccFileHandler fh, int slotId) {
-        if (ci == null || context == null || fh == null) {
+    private CatService(CommandsInterface ci, UiccCardApplication ca, IccRecords ir,
+            Context context, IccFileHandler fh, UiccCard ic, int slotId) {
+        if (ci == null || ca == null || ir == null || context == null || fh == null
+                || ic == null) {
             throw new NullPointerException(
                     "Service: Input parameters must not be null");
         }
+        
         mCmdIf = ci;
         mContext = context;
         mSlotId = slotId;
@@ -155,6 +172,12 @@ public class CatService extends Handler implements AppInterface {
 
         mCmdIf.registerForIccRefresh(this, MSG_ID_ICC_REFRESH, null);
         mCmdIf.setOnCatCcAlphaNotify(this, MSG_ID_ALPHA_NOTIFY, null);
+        mIccRecords = ir;
+        mUiccApplication = ca;
+        
+        // Register for SIM ready event.
+        CatLog.d(this, "registerForReady slotid: " + mSlotId + "instance : " + this);
+        mIccRecords.registerForRecordsLoaded(this, MSG_ID_ICC_RECORDS_LOADED, null);
 
         mUiccController = UiccController.getInstance();
         mUiccController.registerForIccChanged(this, MSG_ID_ICC_CHANGED, null);
@@ -166,9 +189,69 @@ public class CatService extends Handler implements AppInterface {
                 ". STK app installed:" + mStkAppInstalled);
     }
 
-    public void dispose() {
-            CatLog.d(this, "Disposing CatService object for slot: " + mSlotId);
+    /**
+     * Used for instantiating the Service from the Card.
+     *
+     * @param ci CommandsInterface object
+     * @param context phone app context
+     * @param ic Icc card
+     * @param slotId to know the index of card
+     * @return The only Service object in the system
+     */
+    public static CatService getInstance(CommandsInterface ci,
+            Context context, UiccCard ic, int slotId) {
+            
+        UiccCardApplication ca = null;
+        IccFileHandler fh = null;
+        IccRecords ir = null;
+        if (ic != null) {
+            /* Since Cat is not tied to any application, but rather is Uicc application
+             * in itself - just get first FileHandler and IccRecords object
+             */
+            ca = ic.getApplicationIndex(0);
+            if (ca != null) {
+                fh = ca.getIccFileHandler();
+                ir = ca.getIccRecords();
+            }
+        }
+        
+        synchronized (sInstanceLock) {
+            if (sInstance == null) {
+                int simCount = TelephonyManager.getDefault().getSimCount();
+                sInstance = new CatService[simCount];
+                for (int i = 0; i < simCount; i++) {
+                    sInstance[i] = null;
+                }
+            }
+            if (sInstance[slotId] == null) {
+                if (ci == null || ca == null || ir == null || context == null || fh == null
+                        || ic == null) {
+                    return null;
+                }
 
+                sInstance[slotId] = new CatService(ci, ca, ir, context, fh, ic, slotId);
+            } else if ((ir != null) && (mIccRecords != ir)) {
+                if (mIccRecords != null) {
+                    mIccRecords.unregisterForRecordsLoaded(sInstance[slotId]);
+                }
+
+                mIccRecords = ir;
+                mUiccApplication = ca;
+
+                mIccRecords.registerForRecordsLoaded(sInstance[slotId],
+                        MSG_ID_ICC_RECORDS_LOADED, null);
+                CatLog.d(sInstance[slotId], "registerForRecordsLoaded slotid=" + slotId
+                        + " instance:" + sInstance[slotId]);
+            }
+            return sInstance[slotId];
+        }
+    }
+    
+    public void dispose() {
+        synchronized (sInstanceLock) {
+            CatLog.d(this, "Disposing CatService object for slot: " + mSlotId);
+            mIccRecords.unregisterForRecordsLoaded(this);
+            
             // Clean up stk icon if dispose is called
             broadcastCardStateAndIccRefreshResp(CardState.CARDSTATE_ABSENT, null);
 
@@ -184,13 +267,19 @@ public class CatService extends Handler implements AppInterface {
                 mUiccController.unregisterForIccChanged(this);
                 mUiccController = null;
             }
-            if (mMsgDecoder != null) {
-                mMsgDecoder.dispose(mSlotId);
-                mMsgDecoder = null;
-            }
+            mMsgDecoder.dispose();
+            mMsgDecoder = null;
             mHandlerThread.quit();
             mHandlerThread = null;
             removeCallbacksAndMessages(null);
+            if (sInstance != null) {
+                if (SubscriptionManager.isValidSlotId(mSlotId)) {
+                    sInstance[mSlotId] = null;
+                } else {
+                    CatLog.d(this, "error: invaild slot id: " + mSlotId);
+                }
+            }
+        }
     }
 
     @Override
@@ -715,6 +804,30 @@ public class CatService extends Handler implements AppInterface {
 
         mCmdIf.sendEnvelope(hexString, null);
     }
+    
+    /**
+     * Used by application to get an AppInterface object.
+     *
+     * @return The only Service object in the system
+     */
+    //TODO Need to take care for MSIM
+    public static AppInterface getInstance() {
+        int slotId = PhoneConstants.DEFAULT_CARD_INDEX;
+        SubscriptionController sControl = SubscriptionController.getInstance();
+        if (sControl != null) {
+            slotId = sControl.getSlotId(sControl.getDefaultSubId());
+        }
+        return getInstance(null, null, null, slotId);
+    }
+
+    /**
+     * Used by application to get an AppInterface object.
+     *
+     * @return The only Service object in the system
+     */
+    public static AppInterface getInstance(int slotId) {
+        return getInstance(null, null, null, slotId);
+    }
 
     @Override
     public void handleMessage(Message msg) {
@@ -741,6 +854,8 @@ public class CatService extends Handler implements AppInterface {
             break;
         case MSG_ID_CALL_SETUP:
             mMsgDecoder.sendStartDecodingMessageParams(new RilMessage(msg.what, null));
+            break;
+        case MSG_ID_ICC_RECORDS_LOADED:
             break;
         case MSG_ID_RIL_MSG_DECODED:
             handleRilMsg((RilMessage) msg.obj);
@@ -1063,16 +1178,51 @@ public class CatService extends Handler implements AppInterface {
         return (numReceiver > 0);
     }
 
-    void updateIccAvailability() {
+    public void update(CommandsInterface ci,
+            Context context, UiccCard ic) {
+        UiccCardApplication ca = null;
+        IccRecords ir = null;
+        if (ic != null) {
+            /* Since Cat is not tied to any application, but rather is Uicc application
+             * in itself - just get first FileHandler and IccRecords object
+             */
+            ca = ic.getApplicationIndex(0);
+            if (ca != null) {
+                ir = ca.getIccRecords();
+            }
+        }
+        
+        synchronized (sInstanceLock) {
+            if ((ir != null) && (mIccRecords != ir)) {
+                if (mIccRecords != null) {
+                    mIccRecords.unregisterForRecordsLoaded(this);
+                }
+                if (mUiccApplication != null) {
+                    CatLog.d(this, "unregisterForReady slotid: " + mSlotId + "instance : " + this);
+                    mUiccApplication.unregisterForReady(this);
+                }
+                CatLog.d(this,
+                        "Reinitialize the Service with SIMRecords and UiccCardApplication");
+                mIccRecords = ir;
+                mUiccApplication = ca;
+                // re-Register for SIM ready event.
+                mIccRecords.registerForRecordsLoaded(this, MSG_ID_ICC_RECORDS_LOADED, null);
+                CatLog.d(this, "registerForReady slotid: " + mSlotId + "instance : " + this);
+            }
+        }
+    }
+     
+     void updateIccAvailability() {
         if (null == mUiccController) {
             return;
         }
-
+        
         CardState newState = CardState.CARDSTATE_ABSENT;
         UiccCard newCard = mUiccController.getUiccCard(mSlotId);
         if (newCard != null) {
             newState = newCard.getCardState();
         }
+        
         CardState oldState = mCardState;
         mCardState = newState;
         CatLog.d(this,"New Card State = " + newState + " " + "Old Card State = " + oldState);
